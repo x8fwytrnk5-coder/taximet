@@ -3,47 +3,50 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Taxi aplikácia – iPhone verzia</title>
+<title>Taxi – kalkulačka & taxameter</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.5/dist/leaflet.css"/>
 
 <style>
 body {
   font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  background:#f2f2f2;
   margin:0;
+  background:#f2f2f2;
   padding:12px;
 }
-h1 { text-align:center; }
+h1 { text-align:center; margin-bottom:10px; }
+
 .card {
-  background:white;
+  background:#fff;
   padding:14px;
   border-radius:12px;
-  margin-bottom:14px;
+  margin-bottom:12px;
 }
+
 label {
   font-weight:600;
   display:block;
   margin-top:10px;
 }
-input, select, button {
+
+input, button {
   width:100%;
   padding:12px;
   font-size:16px;
   margin-top:6px;
 }
+
 button {
   background:#007aff;
-  color:white;
+  color:#fff;
   border:none;
   border-radius:10px;
 }
-button:active { opacity:0.85; }
 
 #map {
   height:320px;
   border-radius:12px;
-  margin-top:10px;
+  margin-bottom:12px;
 }
 
 .result {
@@ -60,47 +63,52 @@ button:active { opacity:0.85; }
 <h1>🚕 Taxi aplikácia</h1>
 
 <div class="card">
-  <label>Režim</label>
-  <select id="mode">
-    <option value="costs">Kalkulačka nákladov</option>
-    <option value="taximeter">Taxameter</option>
-  </select>
-</div>
-
-<div class="card">
   <label>Poloha vozidla</label>
-  <input id="vehiclePos" readonly placeholder="GPS ešte nenačítané">
-
+  <input id="vehiclePos" readonly placeholder="GPS nenačítané">
   <button onclick="loadGPS()">📍 Načítať polohu vozidla</button>
 
   <label>Nástup klienta</label>
-  <input id="startAddress" placeholder="Klikni na mapu">
+  <input id="startAddr" readonly placeholder="Klikni na mapu">
 
   <label>Cieľ klienta</label>
-  <input id="endAddress" placeholder="Klikni na mapu">
+  <input id="endAddr" readonly placeholder="Klikni na mapu">
 
-  <label>Príplatky</label>
+  <label>Príplatky (€)</label>
   <input type="number" id="extras" value="0" step="0.1">
 </div>
 
 <div id="map"></div>
 
-<div id="results" class="card result">
-  Čakám na údaje…
+<div id="result" class="card result">
+  Čakanie na údaje…
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.5/dist/leaflet.js"></script>
 
 <script>
+/* ===== SKRYTÉ SADZBY (NEMENIŤ) ===== */
+const RATE_PICKUP = 0.31;
+const RATE_RIDE = 0.85;
+
+/* ===== ELEMENTY ===== */
+const vehicleInput = document.getElementById("vehiclePos");
+const startInput = document.getElementById("startAddr");
+const endInput = document.getElementById("endAddr");
+const extrasInput = document.getElementById("extras");
+const resultBox = document.getElementById("result");
+
 /* ===== MAPA ===== */
 const map = L.map("map").setView([48.1486, 17.1077], 13);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19
+  maxZoom:19
 }).addTo(map);
 
-let vehicleMarker, startMarker, endMarker, routeLine;
+let vehicleMarker = null;
+let startMarker = null;
+let endMarker = null;
+let routeLine = null;
 
-/* ===== GPS – iba po kliknutí ===== */
+/* ===== GPS – iOS SAFE ===== */
 function loadGPS() {
   if (!navigator.geolocation) {
     alert("GPS nie je podporované");
@@ -112,14 +120,10 @@ function loadGPS() {
       const lat = pos.coords.latitude;
       const lon = pos.coords.longitude;
 
-      document.getElementById("vehiclePos").value =
-        lat.toFixed(6) + "," + lon.toFixed(6);
+      vehicleInput.value = lat.toFixed(6)+","+lon.toFixed(6);
 
       if (!vehicleMarker) {
-        vehicleMarker = L.marker([lat, lon], { draggable:true })
-          .addTo(map)
-          .bindPopup("Vozidlo");
-        vehicleMarker.on("dragend", calculate);
+        vehicleMarker = L.marker([lat, lon]).addTo(map).bindPopup("Vozidlo");
       } else {
         vehicleMarker.setLatLng([lat, lon]);
       }
@@ -132,34 +136,28 @@ function loadGPS() {
   );
 }
 
-/* ===== Kliky na mapu ===== */
+/* ===== KLIKNUTIE NA MAPU ===== */
 map.on("click", e => {
   const lat = e.latlng.lat;
   const lon = e.latlng.lng;
 
   if (!startMarker) {
-    startMarker = L.marker([lat, lon], { draggable:true })
-      .addTo(map)
-      .bindPopup("Nástup");
-    startMarker.on("dragend", calculate);
-    startAddress.value = lat.toFixed(6)+","+lon.toFixed(6);
+    startMarker = L.marker([lat, lon]).addTo(map).bindPopup("Nástup");
+    startInput.value = lat.toFixed(6)+","+lon.toFixed(6);
   } else if (!endMarker) {
-    endMarker = L.marker([lat, lon], { draggable:true })
-      .addTo(map)
-      .bindPopup("Cieľ");
-    endMarker.on("dragend", calculate);
-    endAddress.value = lat.toFixed(6)+","+lon.toFixed(6);
+    endMarker = L.marker([lat, lon]).addTo(map).bindPopup("Cieľ");
+    endInput.value = lat.toFixed(6)+","+lon.toFixed(6);
   }
+
   calculate();
 });
 
-/* ===== OSRM ===== */
-async function distance(lat1, lon1, lat2, lon2) {
-  const url =
-    `https://router.project-osrm.org/route/v1/driving/${lon1},${lat1};${lon2},${lat2}?overview=false`;
+/* ===== VZDIALENOSŤ (OSRM) ===== */
+async function getKm(a,b,c,d) {
+  const url = `https://router.project-osrm.org/route/v1/driving/${b},${a};${d},${c}?overview=false`;
   const r = await fetch(url);
-  const d = await r.json();
-  return d.routes[0].distance / 1000;
+  const j = await r.json();
+  return j.routes[0].distance / 1000;
 }
 
 /* ===== VÝPOČET ===== */
@@ -169,29 +167,27 @@ async function calculate() {
   const v = vehicleMarker.getLatLng();
   const s = startMarker.getLatLng();
   const e = endMarker.getLatLng();
+
+  const kmPickup = await getKm(v.lat,v.lng,s.lat,s.lng);
+  const kmRide = await getKm(s.lat,s.lng,e.lat,e.lng);
+
   const extras = +extrasInput.value || 0;
 
-  const km1 = await distance(v.lat,v.lng,s.lat,s.lng);
-  const km2 = await distance(s.lat,s.lng,e.lat,e.lng);
+  const total =
+    kmPickup * RATE_PICKUP +
+    kmRide * RATE_RIDE +
+    extras;
 
-  const price = km1*0.31 + km2*0.85 + extras;
-  const prov = price*0.25;
-  const dph = prov*0.23;
-  const profit = price - (prov+dph);
-
-  results.innerText =
-    `Cena/Náklady: ${price.toFixed(2)} € | Zisk: ${profit.toFixed(2)} €`;
-  results.className = "card result " + (profit>=0?"green":"red");
+  resultBox.innerText =
+    `Cena / Náklady: ${total.toFixed(2)} €`;
+  resultBox.className = "card result green";
 
   if (routeLine) map.removeLayer(routeLine);
-  routeLine = L.polyline([[v.lat,v.lng],[s.lat,s.lng],[e.lat,e.lng]],{color:"blue"})
-    .addTo(map);
+  routeLine = L.polyline(
+    [[v.lat,v.lng],[s.lat,s.lng],[e.lat,e.lng]],
+    { color:"blue" }
+  ).addTo(map);
 }
-
-const extrasInput = document.getElementById("extras");
-const startAddress = document.getElementById("startAddress");
-const endAddress = document.getElementById("endAddress");
-const results = document.getElementById("results");
 </script>
 
 </body>
